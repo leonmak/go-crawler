@@ -1,13 +1,14 @@
 package main
 
 import (
-	"net/http"
-	"golang.org/x/net/html"
+	"flag"
 	"fmt"
+	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
-	log "github.com/llimllib/loglevel"
+	"net/http"
 	"strings"
 	"os"
+	log "github.com/llimllib/loglevel"
 )
 
 type Link struct {
@@ -52,7 +53,7 @@ func ExtractLinks(resp *http.Response, depth int) (links []Link) {
 		token := page.Token()  	// get token
 
 		if token.Type == html.ErrorToken {
-			break
+			return
 		}
 
 		// Set text for previous token if have start
@@ -70,6 +71,7 @@ func ExtractLinks(resp *http.Response, depth int) (links []Link) {
 			case html.EndTagToken:
 				if start == nil {
 					log.Warnf("Link End found, no Start: %s", text)
+					return
 				}
 				link := NewLink(*start, text, depth)
 				if link.Valid() {
@@ -99,11 +101,11 @@ func NewLink(tag html.Token, text string, depth int) Link {
 
 // Iterative BFS crawler with channels
 func crawler(urls []string, maxDepth int) (res []Link) {
-	requestTokens := make(chan struct{}, 10)  // set limit of 10 concurrent requests
 	frontier := make(chan []Link)
-	visited := make(map[string]bool)  // map string url to bool isVisited
+	visited := make(map[string]bool)  			// map string url to bool isVisited
 
-	n := len(urls) // number of pending sends
+	requestTokens := make(chan struct{}, 10)  	// set limit of 10 concurrent requests
+	n := len(urls) 								// number of pending sends
 	go func() {
 		initialLinks := []Link{}
 		for _, url := range urls {
@@ -117,7 +119,7 @@ func crawler(urls []string, maxDepth int) (res []Link) {
 	// 2. Increment depth. If max depth, stop.
 
 	for ; n > 0; n-- {
-		// receive from channel and decrease n
+		// receive set of neighbours from channel and decrease n
 		links := <-frontier
 
 		for _, link := range links {
@@ -126,13 +128,14 @@ func crawler(urls []string, maxDepth int) (res []Link) {
 			}
 
 			visited[link.url] = true
-			// don't add children to frontier if depth is maxed
-			if link.depth == maxDepth + 1 {
-				n=0
-				break
-			}
 			res = append(res, link)
-			log.Debugf("Appended %s at Depth %d %d", link.url, link.depth, n)
+			log.Infof("Appended: %s at Depth: %d", link.url, link.depth)
+			log.Debugf("n sends to send: %d", n)
+
+			// don't add children sets to frontier if depth is maxed
+			if link.depth == maxDepth {
+				continue
+			}
 
 			n++
 			go func(link Link) {
@@ -140,6 +143,9 @@ func crawler(urls []string, maxDepth int) (res []Link) {
 				// send children to channel
 				resp, err := getUrl(link.url)
 				if err != nil {
+					// Last url always bug out
+					// `write tcp 127.0.0.1:49345->127.0.0.1:8000: write: broken pipe`
+					frontier<- []Link{}
 					return
 				}
 
@@ -147,9 +153,10 @@ func crawler(urls []string, maxDepth int) (res []Link) {
 				newLinks := ExtractLinks(resp, link.depth + 1)
 				<-requestTokens
 
-				frontier <-newLinks
+				frontier<- newLinks
 			}(link)
 		}
+		//close(frontier)
 	}
 	return
 }
@@ -183,9 +190,11 @@ func writeToFile(path string, text string) {
 }
 
 func writeLinksToCsv(outputPath string, links []Link) {
-	if err := os.RemoveAll(outputPath); err != nil {
+	err := os.RemoveAll(outputPath)
+	if err != nil {
 		log.Fatal(err)
 	}
+	os.Create(outputPath)
 	writeToFile(outputPath, "text, url, depth\n")
 	for _, link := range links {
 		text := strings.Replace(link.text, "\n", " ", -1)
@@ -194,11 +203,21 @@ func writeLinksToCsv(outputPath string, links []Link) {
 	}
 }
 
+func initVars(depth *int) {
+	flag.IntVar(depth,
+		"depth",
+		1,
+		"Max depth to crawl, root is at depth 0, default: 1")
+	flag.Parse()
+
+}
+
 func main() {
-	// go run main.go https://golang.org
-	maxDepth := 3
+	var maxDepth int  // TEST: with maxDepth >/</== tree depth
+	initVars(&maxDepth)
 
 	log.SetPriorityString("info")
+	//log.SetPriorityString("debug")
 	log.SetPrefix("Crawler ")
 
 	log.Debugf("Args: %v", os.Args[1:])
@@ -207,18 +226,30 @@ func main() {
 	}
 
 	outputDir := "output"
-	os.MkdirAll(outputDir, 0644)
+	os.RemoveAll(outputDir)
+	os.MkdirAll(outputDir, os.ModePerm)
 	csvPath := "output.csv"
+
 	urls := os.Args[1:]
+	if os.Args[1] == "-depth" {
+		urls = os.Args[3:]
+	}
 
 	if len(urls) > 1 {
 		for _, url := range urls {
-			links := crawler([]string{outputDir + "/" + url + csvPath}, maxDepth)
-			writeLinksToCsv(csvPath, links)
+			log.Infof("====================================")
+			log.Infof("CRAWLING: %s", url)
+			log.Infof("====================================")
+			links := crawler([]string{url}, maxDepth)
+			r := strings.NewReplacer(":", "-", "/", "-", ".", "-")
+			urlStrip := r.Replace(url)
+			path := outputDir + "/" + urlStrip + ".csv"
+			log.Infof("Results in: %s", path)
+			writeLinksToCsv(path, links)
 		}
 	} else {
 		links := crawler(urls, maxDepth)
-		writeLinksToCsv(csvPath, links)
+		writeLinksToCsv(outputDir + "/" + csvPath, links)
 	}
 
 }
