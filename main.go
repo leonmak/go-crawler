@@ -183,7 +183,7 @@ func writeToFile(path string, text string) {
 }
 
 func writeLinksToCsv(outputPath string, links []Link) {
-	if err := os.Remove(outputPath); err != nil {
+	if err := os.RemoveAll(outputPath); err != nil {
 		log.Fatal(err)
 	}
 	writeToFile(outputPath, "text, url, depth\n")
