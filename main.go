@@ -103,7 +103,7 @@ func crawler(urls []string, maxDepth int) (res []Link) {
 	frontier := make(chan []Link)
 	visited := make(map[string]bool)  // map string url to bool isVisited
 
-	n := 1 // number of pending sends
+	n := len(urls) // number of pending sends
 	go func() {
 		initialLinks := []Link{}
 		for _, url := range urls {
@@ -196,6 +196,8 @@ func writeLinksToCsv(outputPath string, links []Link) {
 
 func main() {
 	// go run main.go https://golang.org
+	maxDepth := 3
+
 	log.SetPriorityString("info")
 	log.SetPrefix("Crawler ")
 
@@ -204,8 +206,20 @@ func main() {
 		log.Fatalln("Missing Url arg")
 	}
 
+	outputDir := "output"
+	os.MkdirAll(outputDir, 0644)
 	csvPath := "output.csv"
-	links := crawler(os.Args[1:], 3)
-	writeLinksToCsv(csvPath, links)
+	urls := os.Args[1:]
+
+	if len(urls) > 1 {
+		for _, url := range urls {
+			links := crawler([]string{outputDir + "/" + url + csvPath}, maxDepth)
+			writeLinksToCsv(csvPath, links)
+		}
+	} else {
+		links := crawler(urls, maxDepth)
+		writeLinksToCsv(csvPath, links)
+	}
+
 }
 
